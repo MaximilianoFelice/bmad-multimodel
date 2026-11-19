@@ -39,8 +39,10 @@ The front matter follows [sub-agents-skills](https://github.com/shinpr/sub-agent
 Install with the [skills CLI](https://github.com/vercel-labs/skills), the same installer BMad uses:
 
 ```bash
-npx skills add MaximilianoFelice/bmad-multimodel
+npx skills add MaximilianoFelice/bmad-multimodel -y
 ```
+
+Without `-y`, the installer asks which agents to link the skill to. That prompt belongs to the skills CLI, not to BMad, even though BMad uses the same installer. Keep the defaults: Universal (`.agents/skills`) and Claude Code.
 
 This puts the skill in `.agents/skills/`, which Antigravity, Codex, Gemini CLI and others read, links it for Claude Code, and records it in `skills-lock.json`. It does not touch BMad's files, so updating either one never conflicts.
 
