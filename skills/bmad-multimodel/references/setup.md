@@ -1,29 +1,39 @@
 # Setting up bmad-multimodel in a project
 
-Do each step only when it is missing, and report what you changed.
+Setup is one script. Run it as written. Do not edit these files by hand, and do not run BMad's installer for this skill, because this skill is not a BMad module.
 
-1. **Install the runner's tools through the project's tool manager.** With mise, add these to `mise.toml` `[tools]` and run `mise install`:
-   ```toml
-   node = "22"                                         # if not already there; acpx needs Node 22.13+
-   "npm:acpx" = "0.22.0"
-   "npm:@agentclientprotocol/claude-agent-acp" = "0.95"  # only if a definition uses run-agent: claude
-   ```
-   - Pin exact versions, because acpx is pre-1.0.
-   - The agent CLIs themselves (`claude`, `agy`, `codex`, `gemini`, `opencode`) must already be installed and logged in.
-   - Without mise, install the same packages with the project's own tool manager. Do not install them globally unless the user asks.
-2. **Add this block to the project's `AGENTS.md`**, or to the file the project's agents read first:
-   ```markdown
-   ## Launching agents
+```bash
+python3 {skill-root}/scripts/setup.py --project-root <project root>
+mise install
+```
 
-   Every subagent launch (BMad implementers, review lenses, critics and any other) follows the `bmad-multimodel` skill: load it before launching or re-engaging a subagent. Role definitions are in `.agents/<skill>.<role>[.<variant>].md`; the model for a role is changed there.
-   ```
-3. **Add `.agents/runs.jsonl` to `.gitignore`.**
-4. **Optional guards, project-specific:**
-   - `.agents/runner.env` sets environment for every launched agent, for example `ADB_SERVER_SOCKET=tcp:127.0.0.1:1` so no agent reaches a phone, or `KUBECONFIG=/dev/null`.
-   - `.agents/runner-policy.json` refuses tools or commands for every definition, for example `{"autoDeny": ["adb", "kubectl", "helm"]}`. A command matches by its first word.
-5. **Check it.**
-   - `python3 {skill-root}/scripts/run_agent.py --list` must parse every definition.
-   - A one-line run per agent kind in use must come back `success`: `--agent <definition> --prompt "Reply with the word ready."`.
+The script prints one line per file. It writes only these three:
+
+| File | Change |
+| --- | --- |
+| `mise.toml` | Adds `"npm:acpx" = "0.22.0"` and `"npm:@agentclientprotocol/claude-agent-acp" = "0.95.0"` under `[tools]`. An existing pin is never changed. Without a `mise.toml` it skips this step and prints what to install with the project's tool manager. |
+| `AGENTS.md` | Adds the "Launching agents" block between `<!-- bmad-multimodel:begin -->` and `<!-- bmad-multimodel:end -->`. A later run replaces the block in place. |
+| `.gitignore` | Adds `.agents/runs.jsonl`. |
+
+Running it again changes nothing. `--check` reports what is missing and exits 1 without writing anything.
+
+The agent CLIs (`claude`, `agy`, `codex`, `gemini`, `opencode`) must already be installed and logged in. The script does not install them.
+
+## Optional guards
+
+These are project-specific, and the script never writes them:
+
+- **`.agents/runner.env`:** `KEY=VALUE` lines added to every launched agent's environment. For example, `ADB_SERVER_SOCKET=tcp:127.0.0.1:1` keeps agents off a phone on adb, and `KUBECONFIG=/dev/null` keeps them off a cluster.
+- **`.agents/runner-policy.json`:** a list of tools or commands refused for every definition, for example `{"autoDeny": ["adb", "kubectl", "helm"]}`. A command matches by its first word.
+
+## Check
+
+```bash
+python3 {skill-root}/scripts/run_agent.py --list
+python3 {skill-root}/scripts/run_agent.py --agent <definition> --prompt "Reply with the word ready."
+```
+
+`--list` must parse every definition. The second command must return `"status": "success"` for each agent kind in use.
 
 ## Changing who runs a role
 
@@ -35,5 +45,6 @@ Nothing in BMad's own files changes, so updating BMad or this skill never confli
 
 ## Antigravity notes
 
-- `run-agent: antigravity` runs `agy acp`, the installed and logged-in agy, and not acpx's bundled Antigravity runtime.
-- Over ACP its model ids carry no effort suffix: `gemini-4-hydrogen` with `effort: high`, not `gemini-4-hydrogen-high`. An unknown id fails the run with the list of valid ids.
+- `run-agent: antigravity` runs `agy acp`, the installed and logged-in agy, not acpx's bundled Antigravity runtime.
+- Over ACP its model ids carry no effort suffix: `gemini-4-hydrogen` with `effort: high`, not `gemini-4-hydrogen-high`.
+- An unknown id fails the run and lists the valid ids.

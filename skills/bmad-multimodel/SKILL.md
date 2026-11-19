@@ -61,4 +61,8 @@ Record the definition name (for example `quick.gemini`) wherever the skill recor
 
 ## Setup and changes
 
-To set up a project, check it, or change which model runs a role, follow `{skill-root}/references/setup.md`.
+- **Setup is one script:** `python3 {skill-root}/scripts/setup.py --project-root <root>`, then `mise install`.
+  - Run it exactly.
+  - Do not make its edits by hand.
+  - Do not run BMad's installer or `bmad` setup for this skill; it is not a BMad module.
+- **Checking a project and changing which model runs a role:** see `{skill-root}/references/setup.md`.

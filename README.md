@@ -30,7 +30,7 @@ The front matter follows [sub-agents-skills](https://github.com/shinpr/sub-agent
   - **Named sessions:** `--session <key>` lets a workflow send review fixes back to the same implementer conversation.
   - **One permission policy** for every agent.
   - **Structured output.**
-- **The result.** `scripts/run_agent.py` (stdlib Python, about 200 lines) reads the definition, opens or resumes the session, applies the permission profile and prints one JSON result.
+- **The result.** `scripts/run_agent.py` (stdlib Python, about 200 lines; `scripts/setup.py` does the one-time project setup) reads the definition, opens or resumes the session, applies the permission profile and prints one JSON result.
   - Statuses: `success`, `empty`, `denied` or `error`. An empty or refused run never passes as a clean review.
   - Every run appends metrics to `.agents/runs.jsonl`, so you can compare models later.
 
@@ -51,18 +51,26 @@ Claude Code can also install it as a plugin:
 /plugin install bmad-multimodel@bmad-multimodel
 ```
 
-Then ask your agent to "set up bmad-multimodel". It follows [`references/setup.md`](skills/bmad-multimodel/references/setup.md):
+Then run the setup script from the project root:
 
-1. **Pin the tools** in your tool manager: `npm:acpx`, plus `npm:@agentclientprotocol/claude-agent-acp` for Claude. With mise:
-   ```toml
-   "npm:acpx" = "0.22.0"
-   "npm:@agentclientprotocol/claude-agent-acp" = "0.95"
-   ```
-2. **Add a short "Launching agents" block** to `AGENTS.md`.
-3. **Ignore the run log** (`.agents/runs.jsonl`) in git.
-4. **Add guards if you need them** (optional):
-   - `.agents/runner.env` sets environment variables for every launched agent.
-   - `.agents/runner-policy.json` refuses tools or commands, for example `{"autoDeny": ["adb", "kubectl"]}`.
+```bash
+python3 .agents/skills/bmad-multimodel/scripts/setup.py
+```
+
+```bash
+mise install
+```
+
+The setup script writes exactly three things and prints one line per file. Running it again changes nothing, and `--check` reports without writing:
+
+- **`mise.toml`:** pins `npm:acpx` 0.22.0 and `npm:@agentclientprotocol/claude-agent-acp` 0.95.0 under `[tools]`. Without mise, it prints what to install.
+- **`AGENTS.md`:** adds the "Launching agents" block between `bmad-multimodel` markers.
+- **`.gitignore`:** adds the run log, `.agents/runs.jsonl`.
+
+Optional guards stay with the project, and the script never writes them:
+
+- `.agents/runner.env` sets environment variables for every launched agent.
+- `.agents/runner-policy.json` refuses tools or commands, for example `{"autoDeny": ["adb", "kubectl"]}`.
 
 The agent CLIs themselves (`claude`, `agy`, `codex`, …) must already be installed and logged in.
 
