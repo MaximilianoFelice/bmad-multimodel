@@ -114,22 +114,6 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(code, 2, define)
         self.assertEqual(self.snapshot(), before)
 
-    def test_uninstall_plans_then_removes_only_what_it_wrote(self):
-        original = {n: (self.root / n).read_text() for n in ("mise.toml", "AGENTS.md")}
-        (self.root / ".agents" / "shinpr-reviewer.md").write_text("---\nrun-agent: codex\n---\nMine.\n")
-        self.run_install("apply", *self.GEMINI, "--define", "bmad-build-auto.implementation", "run-agent=claude", "--deps", "mise", "--agents-block")
-        before = self.snapshot()
-        code, out, _ = self.run_install("uninstall")
-        self.assertIn("would remove .agents/bmad-build-auto.quick.gemini.md", out)
-        self.assertIn("would remove from mise.toml: npm:acpx, npm:@agentclientprotocol/claude-agent-acp", out)
-        self.assertIn("npx skills remove bmad-multimodel bmad-multimodel-install", out)
-        self.assertEqual(self.snapshot(), before)
-        self.run_install("uninstall", "--apply")
-        self.assertEqual({n: (self.root / n).read_text() for n in original}, original)
-        self.assertEqual(sorted(p.name for p in (self.root / ".agents").glob("*.md")), ["shinpr-reviewer.md"])
-        code, out, _ = self.run_install("uninstall")
-        self.assertNotIn("remove", out.replace("npx skills remove", ""))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,7 +13,7 @@ Your harness, your skills, your agents and your models should not come as one bu
 
 ## What you do
 
-1. **Install the two skills** in your project:
+1. **Install the skills** (`bmad-multimodel`, `bmad-multimodel-install`, `bmad-multimodel-uninstall`) in your project:
    ```bash
    npx skills add MaximilianoFelice/bmad-multimodel
    ```
@@ -28,14 +28,14 @@ Run the installer again whenever you want to add or change something. It keeps w
 
 ## Uninstall
 
-1. **Ask for it:**
+1. **Run the uninstaller:**
    ```text
-   /bmad-multimodel-install uninstall
+   /bmad-multimodel-uninstall
    ```
    It shows everything the installer wrote: its role files, the `AGENTS.md` block and the dependency lines. It removes them only after you approve. Role files it did not write are never touched.
 2. **Remove the skills:**
    ```bash
-   npx skills remove bmad-multimodel bmad-multimodel-install
+   npx skills remove bmad-multimodel bmad-multimodel-install bmad-multimodel-uninstall
    ```
 
 ## What you need to know

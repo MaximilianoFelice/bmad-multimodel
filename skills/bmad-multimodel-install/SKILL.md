@@ -39,19 +39,6 @@ The user invokes this skill with a request in their own words, for example "Gemi
    - `mise install` (or their own tool manager), when dependencies were declared;
    - installing and logging in to any agent CLI the plan reported as missing.
 
-## Uninstalling
-
-When the user asks to uninstall:
-
-1. Run `python3 {skill-root}/scripts/install.py uninstall` and show its output. That output lists every file and line the installer wrote:
-   - the definitions marked `installed-by: bmad-multimodel`;
-   - the `AGENTS.md` block;
-   - the dependency lines it added to `mise.toml`.
-
-   Definitions the installer did not write are never touched.
-2. After an explicit approval, run it again with `--apply` and show the output.
-3. Tell the user the last step is theirs: `npx skills remove bmad-multimodel bmad-multimodel-install`, and their tool manager's cleanup for the removed dependencies.
-
 ## Command reference
 
 ```bash
