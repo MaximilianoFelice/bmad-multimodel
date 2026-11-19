@@ -1,11 +1,13 @@
 ---
 name: bmad-multimodel-install
-description: Installer for bmad-multimodel. It proposes which subagent roles run on which agent and model from what the user says they need, then writes only what the user approves. Use only when the user invokes bmad-multimodel-install by name.
+description: Installer for bmad-multimodel. It helps the user decide which subagent roles run on which agent and model by always coming with a concrete, reasoned proposal, then writes only what the user approves. Use only when the user invokes bmad-multimodel-install by name, with or without a request.
 ---
 
 # bmad-multimodel installer
 
-The user invokes this skill with a request in their own words, for example "Gemini as a second opinion on code reviews" or "Codex reviews high-risk changes". You turn that request into a proposal, show it to them, and write only what they approve. The user can run this skill as many times as they like, and each run adds to what is already there.
+You are the user's advisor for this setup. Come with a concrete proposal every time, even when the user gave no request, and explain why you propose it. The user should only need to say "yes" or "change X". Never answer with a list of questions.
+
+The user can run this skill as many times as they like. Each run builds on what is already there.
 
 `{skill-root}` is this skill's installed directory. The script is `python3 {skill-root}/scripts/install.py`, run from the project root.
 
@@ -14,8 +16,10 @@ The user invokes this skill with a request in their own words, for example "Gemi
 - **Write only through `install.py apply`,** and only after the user has approved that exact plan in this conversation.
 - **Never install, download or log in to anything.** That includes `mise install`, `npm`, `npx` and the agent CLIs. The user does those steps.
 - **Never run any other command that changes the project.**
-- **Never choose for the user** something their request does not say: an agent, a model, a permission or a role. Propose it, mark it as your proposal, and let the user decide.
-- **Leave every role the request does not mention without a definition.** A role without a definition runs as before.
+- **Fill every value of the proposal yourself:** agent, model, effort, permission, where dependencies go, the `AGENTS.md` block.
+  - Give each value a one-line reason.
+  - Where a real alternative exists, name it.
+  - What the user asked for always wins over your proposal.
 
 ## Steps
 
@@ -23,21 +27,40 @@ The user invokes this skill with a request in their own words, for example "Gemi
    - `roles`: the roles each installed skill launches;
    - `definitions`: the definitions that already exist;
    - `dependencies_needed`: the dependencies those definitions need;
-   - whether the project has a `mise.toml` and whether the `AGENTS.md` block is present;
-   - which agent CLIs are on PATH.
-2. **Draft the proposal from the user's request and that state.**
-   - **Definitions.** Each one is named `<skill>.<role>` for the main agent of a role, or `<skill>.<role>.<variant>` for an extra opinion, for example `bmad-build-auto.quick.gemini`. Use only roles that `status` lists. For each one, give:
-     - `run-agent`: `claude`, `antigravity`, `codex`, `gemini` or `opencode`;
-     - `model`: the id the agent offers. Ask the user when the request does not name one;
-     - `effort`: optional;
-     - `permission`: the acpx mode, `approve-all`, `approve-reads` or `deny-all`. Ask the user for every definition; never assume one.
-   - **Dependencies.** acpx is always needed. Claude needs the `claude-agent-acp` adapter and Codex needs the `codex-acp` adapter. Antigravity, Gemini CLI and OpenCode need nothing extra. Ask where to declare them: in `mise.toml` (`--deps mise`), or nowhere, in which case the user installs them their own way.
-   - **The `AGENTS.md` block** (`--agents-block`). Show its text. It is what makes every agent apply the launch rule.
-3. **Show the proposal as a table.** Then show the exact output of `install.py plan` with the same arguments. Ask the user to approve it, or to change it.
-4. **After an explicit approval,** run `install.py apply` with exactly those arguments and show its output.
-5. **Tell the user what is left for them:**
+   - `mise_toml` and `agents_block`;
+   - `clis_on_path`: which agent CLIs are installed.
+2. **Build the proposal** from the user's request, if any, and that state. When there is no request, propose the setup that brings the most value with the agents already installed (see "What to propose").
+   - **Definitions.** Each one is named `<skill>.<role>` for a role's main agent, or `<skill>.<role>.<variant>` for an extra opinion, for example `bmad-build-auto.quick.gemini`. Use only roles that `status` lists, and only agents whose CLI is on PATH. Mention any agent you would have used but whose CLI is missing.
+   - **Model and effort.** Pick them from `{skill-root}/references/models.md`.
+   - **Permission.** Use `approve-reads` for reviewers and critics, because they only read. Use `approve-all` for a role that edits, such as `implementation`.
+   - **Dependencies.**
+     - acpx always; the `claude-agent-acp` adapter only when a definition uses Claude; the `codex-acp` adapter only when a definition uses Codex.
+     - Declare them in `mise.toml` (`--deps mise`) when the project has one. Otherwise, list them for the user to install their own way.
+   - **The `AGENTS.md` block** (`--agents-block`): propose adding it when it is missing, since without it no agent applies the launch rule. Show its text.
+3. **Present the proposal:**
+   - first, one table with one row per definition: name, agent, model, effort, permission, and why;
+   - then the dependencies and the block;
+   - then the exact output of `install.py plan` with those arguments.
+
+   End with one line: approve, or say what to change.
+4. **When the user changes something,** update the proposal and show the new plan.
+5. **After an explicit approval,** run `install.py apply` with exactly those arguments and show its output.
+6. **Tell the user what is left for them:**
    - `mise install` (or their own tool manager), when dependencies were declared;
    - installing and logging in to any agent CLI the plan reported as missing.
+
+## What to propose when there is no request
+
+Start from what gives an independent second opinion at the lowest risk. Review roles only read; changing who implements changes the code itself.
+
+- **A second opinion on reviews from a vendor other than the host, using a strong model:**
+  - on `bmad-build-auto.quick` and `bmad-build.quick`, which run on every build;
+  - on `bmad-code-review.quick`;
+  - on `bmad-review.adversarial`.
+
+  Each one is a `.<variant>` definition beside the host's own lens, so both opinions run.
+- **Leave `implementation` and the other lenses as they are.** Mention that the user can move them later by running the installer again.
+- **If only one vendor's CLI is installed,** propose nothing for other vendors. Say which CLI to install to get a second opinion.
 
 ## Command reference
 
