@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Run one agent definition through acpx and print one JSON result.
+"""Run one role definition through acpx and print one JSON result.
 
-A definition is `<agents-dir>/<name>.md` with flat front matter (the
-sub-agents-skills format): run-agent, model, effort, permission. The body is
-prepended to the prompt. Sessions are named `<definition>--<session>` so a
+A definition is `<agents-dir>/<name>.md` with flat front matter: run-agent,
+model, effort, permission (an acpx permission mode). Its body, if any, is
+prepended to the prompt. `--session <key>` keeps the conversation so the
 caller can send follow-up prompts to the same agent.
 
 Statuses: success (exit 0 and a non-empty answer), denied (every permission
-the agent asked for was refused), empty (the agent ended with no answer),
-error (anything else). Only success means the agent did the work.
+the agent asked for was refused), empty (it ended with no answer), error.
+Only success means the agent did the work.
 """
 from __future__ import annotations
 
@@ -23,22 +23,18 @@ import sys
 import time
 from pathlib import Path
 
-# run-agent value -> acpx agent arguments (a named acpx agent, or a raw ACP command).
+# run-agent value -> acpx agent arguments.
 AGENTS = {
     "claude": ["claude"],
     "codex": ["codex"],
     "gemini": ["gemini"],
     "opencode": ["opencode"],
     "antigravity": ["--agent", "agy acp"],
-    "agy": ["--agent", "agy acp"],
 }
-# Session config key that carries the reasoning level, per agent.
-EFFORT_KEYS = {"claude": "effort", "antigravity": "thought_level", "agy": "thought_level", "codex": "reasoning_effort"}
-SAFE = ["read", "search", "fetch", "think", "execute"]
-PERMISSIONS = {
-    "read-only": {"autoApprove": SAFE, "autoDeny": ["edit", "delete", "move"], "defaultAction": "deny"},
-    "safe-edit": {"autoApprove": SAFE + ["edit", "delete", "move"], "defaultAction": "deny"},
-}
+# Session config option that carries the reasoning level, per agent.
+EFFORT_KEYS = {"claude": "effort", "antigravity": "thought_level", "codex": "reasoning_effort"}
+# acpx permission modes.
+PERMISSIONS = {"approve-all": "--approve-all", "approve-reads": "--approve-reads", "deny-all": "--deny-all"}
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
@@ -49,9 +45,9 @@ def parse_definition(path: Path) -> tuple[dict[str, str], str]:
         return {}, text.strip()
     fields = {}
     for line in match.group(1).splitlines():
-        if ":" in line and not line.lstrip().startswith("#"):
+        if ":" in line:
             key, value = line.split(":", 1)
-            fields[key.strip()] = value.split(" #", 1)[0].strip().strip("\"'")
+            fields[key.strip()] = value.strip().strip("\"'")
     return fields, match.group(2).strip()
 
 
@@ -59,30 +55,8 @@ def agents_dir(args) -> Path:
     return Path(args.agents_dir or os.environ.get("SUB_AGENTS_DIR") or Path(args.cwd) / ".agents")
 
 
-def policy_for(permission: str, directory: Path) -> dict | None:
-    if permission == "yolo":
-        return None
-    policy = json.loads(json.dumps(PERMISSIONS.get(permission, PERMISSIONS["safe-edit"])))
-    extra = directory / "runner-policy.json"
-    if extra.exists():
-        project = json.loads(extra.read_text(encoding="utf-8"))
-        policy["autoDeny"] = policy.get("autoDeny", []) + project.get("autoDeny", [])
-    return policy
-
-
-def runner_env(directory: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    extra = directory / "runner.env"
-    if extra.exists():
-        for line in extra.read_text(encoding="utf-8").splitlines():
-            if "=" in line and not line.lstrip().startswith("#"):
-                key, value = line.split("=", 1)
-                env[key.strip()] = value.strip()
-    return env
-
-
 def parse_stream(stdout: str) -> dict:
-    text, usage, errors, stop = [], None, [], None
+    text, usage, errors = [], None, []
     for line in stdout.splitlines():
         try:
             event = json.loads(line)
@@ -95,8 +69,8 @@ def parse_stream(stdout: str) -> dict:
             text.append((update.get("content") or {}).get("text", ""))
         result = event.get("result")
         if isinstance(result, dict) and "stopReason" in result:
-            stop, usage = result["stopReason"], result.get("usage")
-    return {"text": "".join(text), "usage": usage, "errors": errors, "stop_reason": stop}
+            usage = result.get("usage")
+    return {"text": "".join(text), "usage": usage, "errors": errors}
 
 
 def classify(exit_code: int, parsed: dict) -> str:
@@ -107,51 +81,55 @@ def classify(exit_code: int, parsed: dict) -> str:
     return "success" if parsed["text"].strip() else "empty"
 
 
-def acpx(base: list[str], tail: list[str], env, cwd, timeout) -> subprocess.CompletedProcess:
-    return subprocess.run(["acpx", *base, *tail], cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
+def acpx(args: list[str], cwd: str, timeout: int | None) -> subprocess.CompletedProcess:
+    return subprocess.run(["acpx", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
 
 
 def run(args) -> dict:
-    directory = agents_dir(args)
     if not NAME.match(args.agent):
         raise ValueError(f"invalid definition name {args.agent!r}")
-    path = directory / f"{args.agent}.md"
+    path = agents_dir(args) / f"{args.agent}.md"
     if not path.exists():
-        raise FileNotFoundError(f"no definition {path}; create it from the skill's template")
+        raise FileNotFoundError(f"no definition {path}")
     fields, body = parse_definition(path)
     kind = fields.get("run-agent", "")
-    if kind == "native":
-        raise ValueError("run-agent: native is launched with the host's own subagent tool, not this runner")
     if kind not in AGENTS:
-        raise ValueError(f"unsupported run-agent {kind!r}; one of {', '.join(AGENTS)} or native")
+        raise ValueError(f"unsupported run-agent {kind!r}; one of {', '.join(AGENTS)}")
+    permission = fields.get("permission")
+    if permission and permission not in PERMISSIONS:
+        raise ValueError(f"unsupported permission {permission!r}; one of {', '.join(PERMISSIONS)}")
     if shutil.which("acpx") is None:
-        raise FileNotFoundError("acpx is not on PATH; add npm:acpx to the project's mise.toml")
+        raise FileNotFoundError("acpx is not on PATH; it is a dependency of this project (see the bmad-multimodel README)")
     prompt = Path(args.prompt_file).read_text(encoding="utf-8") if args.prompt_file else args.prompt
     session = f"{args.agent}--{args.session or 'run-' + secrets.token_hex(4)}"
-    env, cwd = runner_env(directory), args.cwd
-    flags = ["--format", "json", "--non-interactive-permissions", "deny", "--timeout", str(args.timeout)]
+    agent, notes = AGENTS[kind], []
+    flags = ["--format", "json"]
     if fields.get("model"):
         flags += ["--model", fields["model"]]
-    policy = policy_for(fields.get("permission", "safe-edit"), directory)
-    flags += ["--approve-all"] if policy is None else ["--permission-policy", json.dumps(policy)]
-    agent = AGENTS[kind]
+    if permission:
+        flags.append(PERMISSIONS[permission])
+    if args.timeout:
+        flags += ["--timeout", str(args.timeout)]
     started = time.time()
-    ensured = acpx(agent, ["sessions", "ensure", "--name", session], env, cwd, 300)
+    ensured = acpx([*agent, "sessions", "ensure", "--name", session], args.cwd, 300)
     if ensured.returncode != 0:
-        return {"status": "error", "error": ensured.stderr.strip()[-500:], "session": session}
-    if fields.get("effort") and kind in EFFORT_KEYS:
-        acpx(agent, ["set", "-s", session, EFFORT_KEYS[kind], fields["effort"]], env, cwd, 300)
+        return {"status": "error", "definition": args.agent, "error": ensured.stderr.strip()[-500:]}
+    if fields.get("effort"):
+        if kind in EFFORT_KEYS:
+            acpx([*agent, "set", "-s", session, EFFORT_KEYS[kind], fields["effort"]], args.cwd, 300)
+        else:
+            notes.append(f"effort is not applied for run-agent {kind}")
     message = f"{body}\n\n---\n\n{prompt}" if body else prompt
     try:
-        done = acpx(flags + agent, ["prompt", "-s", session, message], env, cwd, args.timeout + 60)
+        done = acpx([*flags, *agent, "prompt", "-s", session, message], args.cwd, args.timeout + 60 if args.timeout else None)
         exit_code, stdout, stderr = done.returncode, done.stdout, done.stderr
     except subprocess.TimeoutExpired as expired:
-        exit_code, stdout, stderr = 124, expired.stdout or "", "timeout"
-        stdout = stdout.decode() if isinstance(stdout, bytes) else stdout
-    parsed = parse_stream(stdout)
+        out = expired.stdout or ""
+        exit_code, stdout, stderr = 124, out.decode() if isinstance(out, bytes) else out, "timeout"
     if not args.session:
-        acpx(agent, ["sessions", "close", session], env, cwd, 60)
-    result = {
+        acpx([*agent, "sessions", "close", session], args.cwd, 60)
+    parsed = parse_stream(stdout)
+    return {
         "status": classify(exit_code, parsed),
         "definition": args.agent,
         "run_agent": kind,
@@ -161,12 +139,9 @@ def run(args) -> dict:
         "seconds": round(time.time() - started),
         "usage": parsed["usage"],
         "error": "; ".join(parsed["errors"]) or (stderr.strip()[-300:] if exit_code not in (0, 5) else None),
+        "notes": notes,
         "text": parsed["text"],
     }
-    log = directory / "runs.jsonl"
-    with log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps({k: v for k, v in result.items() if k != "text"} | {"at": int(started)}) + "\n")
-    return result
 
 
 def list_definitions(args) -> list[dict]:
@@ -185,10 +160,10 @@ def main(argv=None) -> int:
     parser.add_argument("--agent", help="definition name, without .md")
     parser.add_argument("--prompt")
     parser.add_argument("--prompt-file")
-    parser.add_argument("--session", help="key for a resumable session (e.g. a ticket id)")
+    parser.add_argument("--session", help="key for a resumable session, e.g. a ticket id")
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--agents-dir")
-    parser.add_argument("--timeout", type=int, default=1800, help="seconds")
+    parser.add_argument("--timeout", type=int, help="seconds; default: acpx's own")
     parser.add_argument("--list", action="store_true", help="list definitions")
     parser.add_argument("--prefix", help="with --list: only <prefix> and <prefix>.*")
     args = parser.parse_args(argv)

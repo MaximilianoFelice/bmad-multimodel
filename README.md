@@ -1,92 +1,46 @@
 # bmad-multimodel
 
-Run each subagent role on the model you choose: Claude, Gemini through Google Antigravity, Codex, Gemini CLI or OpenCode. You can also run the same role on several models to get second opinions. BMad workflows such as `bmad-build-auto` and `bmad-review` stay untouched.
+Choose which model runs each part of your BMad workflow: Claude, Gemini (through Antigravity), Codex, Gemini CLI or OpenCode.
 
-BMad skills say **what** a subagent does: the prompt for the implementer or for a review lens. This skill decides **who** runs it, from one small definition file per role:
+## The idea
 
-```
-.agents/bmad-build-auto.implementer.md    run-agent: claude
-.agents/bmad-build-auto.quick.md          run-agent: claude
-.agents/bmad-build-auto.quick.gemini.md   run-agent: antigravity  ← second opinion, same prompt
-.agents/bmad-review.adversarial.md        run-agent: codex
-```
+Your harness, your skills, your agents and your models should not come as one bundle. BMad already says **what** each subagent does: the implementer, each review lens. This repo only lets you say **who** runs it.
 
-```markdown
----
-run-agent: antigravity
-model: gemini-4-hydrogen
-effort: high
-permission: read-only
----
-Follow the task below exactly; it comes from the skill that launched you.
-```
+- **BMad stays untouched.** Every model gets the same prompt BMad wrote.
+- **Nothing changes until you ask.** A role you don't configure keeps running exactly as it does today.
+- **You decide everything:** which roles, which agents, which models, which permissions. Nothing is chosen for you, and nothing is downloaded behind your back.
+- **Second opinions are just more agents on the same role.** For example, Claude and Gemini both review the same change.
 
-The front matter follows [sub-agents-skills](https://github.com/shinpr/sub-agents-skills), so you can move definitions between the two runners.
+## What you do
 
-## How it works
+1. **Install the two skills** in your project:
+   ```bash
+   npx skills add MaximilianoFelice/bmad-multimodel
+   ```
+2. **Ask your agent for the installer, in your own words**, for example:
+   ```text
+   /bmad-multimodel-install I want Gemini 4 Hydrogen as a second opinion on code reviews
+   ```
+   It shows you which roles exist, proposes a setup, and asks you about anything your request did not settle, such as the model or the permissions. It writes only what you approve.
+3. **Install the dependencies it declared** with your own tool, for example `mise install`.
 
-- **The launch rule.** When a skill launches a subagent, the agent loads this skill. The skill tells it to find `<skill>.<role>*.md` and run each matching definition with the launching skill's exact prompt. When a role has no definition yet, it creates one that runs on Claude.
-- **The runner.** [acpx](https://github.com/openclaw/acpx), a headless Agent Client Protocol client, launches the agents. It gives every vendor the same interface:
-  - **Named sessions:** `--session <key>` lets a workflow send review fixes back to the same implementer conversation.
-  - **One permission policy** for every agent.
-  - **Structured output.**
-- **The result.** `scripts/run_agent.py` (stdlib Python, about 200 lines; `scripts/setup.py` does the one-time project setup) reads the definition, opens or resumes the session, applies the permission profile and prints one JSON result.
-  - Statuses: `success`, `empty`, `denied` or `error`. An empty or refused run never passes as a clean review.
-  - Every run appends metrics to `.agents/runs.jsonl`, so you can compare models later.
+Run the installer again whenever you want to add or change something. It keeps what is already there.
 
-## Install
+## What you need to know
 
-Install with the [skills CLI](https://github.com/vercel-labs/skills), the same installer BMad uses:
+- **One file per role.** Each configured role is a small file, `.agents/<skill>.<role>.md`. An extra opinion on the same role is another file, `.agents/<skill>.<role>.<variant>.md`. To see or change who runs a role, open its file.
+- **Dependencies are yours.** The installer declares them in your repo, and you install them.
 
-```bash
-npx skills add MaximilianoFelice/bmad-multimodel
-```
+  | You use | You need |
+  | --- | --- |
+  | any agent | [acpx](https://github.com/openclaw/acpx), which launches the agents and keeps their conversations |
+  | Claude Code | `@agentclientprotocol/claude-agent-acp` |
+  | Codex | `@agentclientprotocol/codex-acp` |
+  | Antigravity, Gemini CLI, OpenCode | nothing extra |
 
-This puts the skill in `.agents/skills/`, which Antigravity, Codex, Gemini CLI and others read, links it for Claude Code, and records it in `skills-lock.json`. It does not touch BMad's files, so updating either one never conflicts.
-
-Claude Code can also install it as a plugin:
-
-```text
-/plugin marketplace add MaximilianoFelice/bmad-multimodel
-/plugin install bmad-multimodel@bmad-multimodel
-```
-
-Then run the setup script from the project root:
-
-```bash
-python3 .agents/skills/bmad-multimodel/scripts/setup.py
-```
-
-```bash
-mise install
-```
-
-The setup script writes exactly three things and prints one line per file. Running it again changes nothing, and `--check` reports without writing:
-
-- **`mise.toml`:** pins `npm:acpx` 0.22.0 and `npm:@agentclientprotocol/claude-agent-acp` 0.95.0 under `[tools]`. Without mise, it prints what to install.
-- **`AGENTS.md`:** adds the "Launching agents" block between `bmad-multimodel` markers.
-- **`.gitignore`:** adds the run log, `.agents/runs.jsonl`.
-
-Optional guards stay with the project, and the script never writes them:
-
-- `.agents/runner.env` sets environment variables for every launched agent.
-- `.agents/runner-policy.json` refuses tools or commands, for example `{"autoDeny": ["adb", "kubectl"]}`.
-
-The agent CLIs themselves (`claude`, `agy`, `codex`, …) must already be installed and logged in.
-
-## Security
-
-`permission: read-only` only refuses file edits made through the agent's edit tools. The agent can still run commands. No CLI permission mode is a security boundary, and Antigravity's own sandbox can be bypassed by the model.
-
-A launched agent has the same access as the session that launched it. Keep credentials the agents must not use out of their environment, with `runner.env`, a container or a separate user.
-
-## Develop
-
-```bash
-python3 -m unittest discover -s tests
-```
-
-The tests run the runner against a fake `acpx`.
+  The agents' own CLIs (`claude`, `agy`, `codex`, `gemini`, `opencode`) must be installed and logged in by you.
+- **Permissions are your choice.** Each role uses one of acpx's modes: `approve-all`, `approve-reads` or `deny-all`. None of them is a security boundary. A launched agent can reach whatever your own session can reach.
+- **A failed agent never counts as a clean result.** An agent that gives no answer, or whose actions were all refused, is reported as failed, never as "nothing found".
 
 ## License
 

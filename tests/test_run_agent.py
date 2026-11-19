@@ -18,13 +18,12 @@ FAKE_ACPX = textwrap.dedent(
     with open(os.environ["FAKE_LOG"], "a") as log:
         log.write(json.dumps(sys.argv[1:]) + "\\n")
     if "prompt" not in sys.argv:
-        print("ok")
         sys.exit(0)
     mode = os.environ.get("FAKE_MODE", "answer")
     def emit(event):
         print(json.dumps(event))
-    if mode in ("answer", "denied"):
-        for chunk in (["All ", "good."] if mode == "answer" else []):
+    if mode == "answer":
+        for chunk in ("All ", "good."):
             emit({"method": "session/update", "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": chunk}}}})
     if mode == "error":
         emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "Cannot apply --model"}})
@@ -47,9 +46,9 @@ class RunAgentTest(unittest.TestCase):
         self.agents.mkdir()
         self.log = self.tmp / "calls.jsonl"
 
-    def define(self, name, front, body="Follow the task."):
+    def define(self, name, front, body=""):
         lines = "\n".join(f"{k}: {v}" for k, v in front.items())
-        (self.agents / f"{name}.md").write_text(f"---\n{lines}\n---\n{body}\n")
+        (self.agents / f"{name}.md").write_text(f"---\n{lines}\n---\n{body}")
 
     def run_agent(self, *args, mode="answer"):
         env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", FAKE_LOG=str(self.log), FAKE_MODE=mode)
@@ -59,24 +58,37 @@ class RunAgentTest(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def test_success_joins_answer_and_logs_without_text(self):
-        self.define("bmad-review.adversarial", {"run-agent": "claude", "model": "sonnet", "permission": "read-only"})
+    def prompt_call(self):
+        return next(c for c in self.calls() if "prompt" in c)
+
+    def test_success_returns_the_answer(self):
+        self.define("bmad-review.adversarial", {"run-agent": "claude", "model": "sonnet"})
         code, result = self.run_agent("--agent", "bmad-review.adversarial", "--prompt", "Review it.")
         self.assertEqual((code, result["status"], result["text"]), (0, "success", "All good."))
         self.assertEqual(result["usage"], {"totalTokens": 42})
-        logged = json.loads((self.agents / "runs.jsonl").read_text())
-        self.assertNotIn("text", logged)
-        self.assertEqual(logged["model"], "sonnet")
 
-    def test_prompt_carries_body_model_and_read_only_policy(self):
-        self.define("x.quick", {"run-agent": "claude", "model": "sonnet", "permission": "read-only"}, "Body line.")
+    def test_prompt_is_sent_as_given_without_a_body(self):
+        self.define("x.quick", {"run-agent": "claude"})
         self.run_agent("--agent", "x.quick", "--prompt", "The task.")
-        prompt_call = next(c for c in self.calls() if "prompt" in c)
-        self.assertEqual(prompt_call[-1], "Body line.\n\n---\n\nThe task.")
-        self.assertIn("sonnet", prompt_call)
-        policy = json.loads(prompt_call[prompt_call.index("--permission-policy") + 1])
-        self.assertIn("edit", policy["autoDeny"])
-        self.assertEqual(policy["defaultAction"], "deny")
+        self.assertEqual(self.prompt_call()[-1], "The task.")
+
+    def test_body_when_present_goes_before_the_prompt(self):
+        self.define("x.quick", {"run-agent": "claude"}, "Body line.\n")
+        self.run_agent("--agent", "x.quick", "--prompt", "The task.")
+        self.assertEqual(self.prompt_call()[-1], "Body line.\n\n---\n\nThe task.")
+
+    def test_no_permission_flag_unless_the_definition_sets_one(self):
+        self.define("x.quick", {"run-agent": "claude", "model": "sonnet"})
+        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        call = self.prompt_call()
+        self.assertIn("sonnet", call)
+        for flag in ("--approve-all", "--approve-reads", "--deny-all", "--permission-policy", "--non-interactive-permissions"):
+            self.assertNotIn(flag, call)
+
+    def test_permission_maps_to_the_acpx_mode(self):
+        self.define("x.quick", {"run-agent": "claude", "permission": "approve-reads"})
+        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        self.assertIn("--approve-reads", self.prompt_call())
 
     def test_antigravity_uses_agy_acp_and_thought_level(self):
         self.define("x.quick.gemini", {"run-agent": "antigravity", "model": "gemini-4-hydrogen", "effort": "high"})
@@ -85,28 +97,19 @@ class RunAgentTest(unittest.TestCase):
         self.assertTrue(all(c[c.index("--agent") + 1] == "agy acp" for c in calls))
         self.assertTrue(any(c[-2:] == ["thought_level", "high"] for c in calls))
 
-    def test_session_is_named_kept_open_and_one_shot_is_closed(self):
-        self.define("x.implementer", {"run-agent": "claude", "permission": "safe-edit"})
-        self.run_agent("--agent", "x.implementer", "--prompt", "Build.", "--session", "41")
-        self.assertIn(["claude", "sessions", "ensure", "--name", "x.implementer--41"], self.calls())
+    def test_effort_without_a_known_option_is_reported_not_dropped_silently(self):
+        self.define("x.quick", {"run-agent": "gemini", "effort": "high"})
+        code, result = self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        self.assertEqual(result["notes"], ["effort is not applied for run-agent gemini"])
+
+    def test_session_is_named_and_kept_open_and_one_shot_is_closed(self):
+        self.define("x.implementation", {"run-agent": "claude"})
+        self.run_agent("--agent", "x.implementation", "--prompt", "Build.", "--session", "41")
+        self.assertIn(["claude", "sessions", "ensure", "--name", "x.implementation--41"], self.calls())
         self.assertFalse(any("close" in c for c in self.calls()))
         self.log.unlink()
-        self.run_agent("--agent", "x.implementer", "--prompt", "Build.")
+        self.run_agent("--agent", "x.implementation", "--prompt", "Build.")
         self.assertTrue(any("close" in c for c in self.calls()))
-
-    def test_project_policy_and_env_are_applied(self):
-        self.define("x.quick", {"run-agent": "claude", "permission": "safe-edit"})
-        (self.agents / "runner-policy.json").write_text('{"autoDeny": ["adb"]}')
-        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
-        prompt_call = next(c for c in self.calls() if "prompt" in c)
-        self.assertIn("adb", json.loads(prompt_call[prompt_call.index("--permission-policy") + 1])["autoDeny"])
-
-    def test_yolo_approves_all(self):
-        self.define("x.quick", {"run-agent": "claude", "permission": "yolo"})
-        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
-        prompt_call = next(c for c in self.calls() if "prompt" in c)
-        self.assertIn("--approve-all", prompt_call)
-        self.assertNotIn("--permission-policy", prompt_call)
 
     def test_failures_are_never_success(self):
         self.define("x.quick", {"run-agent": "claude"})
@@ -114,12 +117,17 @@ class RunAgentTest(unittest.TestCase):
             code, result = self.run_agent("--agent", "x.quick", "--prompt", "Go.", mode=mode)
             self.assertEqual((code, result["status"]), (1, status), mode)
 
-    def test_native_missing_and_unknown_definitions_are_errors(self):
-        self.define("x.native", {"run-agent": "native"})
+    def test_bad_definitions_are_errors(self):
         self.define("x.odd", {"run-agent": "cobol"})
-        for name in ("x.native", "x.odd", "x.missing", "../etc"):
+        self.define("x.perm", {"run-agent": "claude", "permission": "safe-edit"})
+        for name in ("x.odd", "x.perm", "x.missing", "../etc"):
             code, result = self.run_agent("--agent", name, "--prompt", "Go.")
             self.assertEqual((code, result["status"]), (1, "error"), name)
+
+    def test_writes_nothing_besides_calling_acpx(self):
+        self.define("x.quick", {"run-agent": "claude"})
+        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        self.assertEqual(sorted(p.name for p in self.agents.iterdir()), ["x.quick.md"])
 
     def test_list_filters_by_role_prefix(self):
         self.define("bmad-build-auto.quick", {"run-agent": "claude"})
@@ -127,12 +135,6 @@ class RunAgentTest(unittest.TestCase):
         self.define("bmad-build-auto.quickest", {"run-agent": "claude"})
         code, result = self.run_agent("--list", "--prefix", "bmad-build-auto.quick")
         self.assertEqual([d["name"] for d in result], ["bmad-build-auto.quick", "bmad-build-auto.quick.gemini"])
-
-    def test_template_parses(self):
-        template = SCRIPT.parents[1] / "templates" / "definition.md"
-        (self.agents / "t.role.md").write_text(template.read_text())
-        code, result = self.run_agent("--list")
-        self.assertEqual(result, [{"name": "t.role", "run-agent": "claude", "permission": "read-only"}])
 
 
 if __name__ == "__main__":
