@@ -1,0 +1,10 @@
+{
+  "name": "bmad-multimodel",
+  "version": "0.1.0",
+  "description": "Routes subagent launches through per-role definitions so roles run on Claude, Gemini (Antigravity), Codex and others, with resumable sessions.",
+  "author": { "name": "Maximiliano Felice", "url": "https://github.com/MaximilianoFelice" },
+  "homepage": "https://github.com/MaximilianoFelice/bmad-multimodel",
+  "repository": "https://github.com/MaximilianoFelice/bmad-multimodel.git",
+  "license": "MIT",
+  "skills": "./skills/"
+}

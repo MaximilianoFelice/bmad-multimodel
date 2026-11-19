@@ -1,0 +1,15 @@
+{
+  "name": "bmad-multimodel",
+  "owner": { "name": "Maximiliano Felice", "url": "https://github.com/MaximilianoFelice" },
+  "description": "Run each BMad subagent role on the model you choose.",
+  "plugins": [
+    {
+      "name": "bmad-multimodel",
+      "source": "./",
+      "description": "Routes subagent launches through per-role definitions so roles run on Claude, Gemini (Antigravity), Codex and others, with resumable sessions.",
+      "version": "0.1.0",
+      "category": "Developer Tools",
+      "tags": ["bmad", "sub-agents", "multi-llm", "acp", "acpx", "antigravity", "codex"]
+    }
+  ]
+}

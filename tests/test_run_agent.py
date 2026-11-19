@@ -1,0 +1,139 @@
+"""Tests for run_agent.py against a fake acpx that records its calls."""
+import json
+import os
+import stat
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+SCRIPT = Path(__file__).resolve().parents[1] / "skills" / "bmad-multimodel" / "scripts" / "run_agent.py"
+
+FAKE_ACPX = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    import json, os, sys
+    with open(os.environ["FAKE_LOG"], "a") as log:
+        log.write(json.dumps(sys.argv[1:]) + "\\n")
+    if "prompt" not in sys.argv:
+        print("ok")
+        sys.exit(0)
+    mode = os.environ.get("FAKE_MODE", "answer")
+    def emit(event):
+        print(json.dumps(event))
+    if mode in ("answer", "denied"):
+        for chunk in (["All ", "good."] if mode == "answer" else []):
+            emit({"method": "session/update", "params": {"update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": chunk}}}})
+    if mode == "error":
+        emit({"jsonrpc": "2.0", "id": None, "error": {"code": -32603, "message": "Cannot apply --model"}})
+        sys.exit(1)
+    emit({"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn", "usage": {"totalTokens": 42}}})
+    sys.exit(5 if mode == "denied" else 0)
+    """
+)
+
+
+class RunAgentTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.bin = self.tmp / "bin"
+        self.bin.mkdir()
+        fake = self.bin / "acpx"
+        fake.write_text(FAKE_ACPX)
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        self.agents = self.tmp / ".agents"
+        self.agents.mkdir()
+        self.log = self.tmp / "calls.jsonl"
+
+    def define(self, name, front, body="Follow the task."):
+        lines = "\n".join(f"{k}: {v}" for k, v in front.items())
+        (self.agents / f"{name}.md").write_text(f"---\n{lines}\n---\n{body}\n")
+
+    def run_agent(self, *args, mode="answer"):
+        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", FAKE_LOG=str(self.log), FAKE_MODE=mode)
+        done = subprocess.run([sys.executable, str(SCRIPT), "--cwd", str(self.tmp), *args], env=env, capture_output=True, text=True)
+        return done.returncode, json.loads(done.stdout)
+
+    def calls(self):
+        return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def test_success_joins_answer_and_logs_without_text(self):
+        self.define("bmad-review.adversarial", {"run-agent": "claude", "model": "sonnet", "permission": "read-only"})
+        code, result = self.run_agent("--agent", "bmad-review.adversarial", "--prompt", "Review it.")
+        self.assertEqual((code, result["status"], result["text"]), (0, "success", "All good."))
+        self.assertEqual(result["usage"], {"totalTokens": 42})
+        logged = json.loads((self.agents / "runs.jsonl").read_text())
+        self.assertNotIn("text", logged)
+        self.assertEqual(logged["model"], "sonnet")
+
+    def test_prompt_carries_body_model_and_read_only_policy(self):
+        self.define("x.quick", {"run-agent": "claude", "model": "sonnet", "permission": "read-only"}, "Body line.")
+        self.run_agent("--agent", "x.quick", "--prompt", "The task.")
+        prompt_call = next(c for c in self.calls() if "prompt" in c)
+        self.assertEqual(prompt_call[-1], "Body line.\n\n---\n\nThe task.")
+        self.assertIn("sonnet", prompt_call)
+        policy = json.loads(prompt_call[prompt_call.index("--permission-policy") + 1])
+        self.assertIn("edit", policy["autoDeny"])
+        self.assertEqual(policy["defaultAction"], "deny")
+
+    def test_antigravity_uses_agy_acp_and_thought_level(self):
+        self.define("x.quick.gemini", {"run-agent": "antigravity", "model": "gemini-4-hydrogen", "effort": "high"})
+        self.run_agent("--agent", "x.quick.gemini", "--prompt", "Go.")
+        calls = self.calls()
+        self.assertTrue(all(c[c.index("--agent") + 1] == "agy acp" for c in calls))
+        self.assertTrue(any(c[-2:] == ["thought_level", "high"] for c in calls))
+
+    def test_session_is_named_kept_open_and_one_shot_is_closed(self):
+        self.define("x.implementer", {"run-agent": "claude", "permission": "safe-edit"})
+        self.run_agent("--agent", "x.implementer", "--prompt", "Build.", "--session", "41")
+        self.assertIn(["claude", "sessions", "ensure", "--name", "x.implementer--41"], self.calls())
+        self.assertFalse(any("close" in c for c in self.calls()))
+        self.log.unlink()
+        self.run_agent("--agent", "x.implementer", "--prompt", "Build.")
+        self.assertTrue(any("close" in c for c in self.calls()))
+
+    def test_project_policy_and_env_are_applied(self):
+        self.define("x.quick", {"run-agent": "claude", "permission": "safe-edit"})
+        (self.agents / "runner-policy.json").write_text('{"autoDeny": ["adb"]}')
+        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        prompt_call = next(c for c in self.calls() if "prompt" in c)
+        self.assertIn("adb", json.loads(prompt_call[prompt_call.index("--permission-policy") + 1])["autoDeny"])
+
+    def test_yolo_approves_all(self):
+        self.define("x.quick", {"run-agent": "claude", "permission": "yolo"})
+        self.run_agent("--agent", "x.quick", "--prompt", "Go.")
+        prompt_call = next(c for c in self.calls() if "prompt" in c)
+        self.assertIn("--approve-all", prompt_call)
+        self.assertNotIn("--permission-policy", prompt_call)
+
+    def test_failures_are_never_success(self):
+        self.define("x.quick", {"run-agent": "claude"})
+        for mode, status in (("empty", "empty"), ("denied", "denied"), ("error", "error")):
+            code, result = self.run_agent("--agent", "x.quick", "--prompt", "Go.", mode=mode)
+            self.assertEqual((code, result["status"]), (1, status), mode)
+
+    def test_native_missing_and_unknown_definitions_are_errors(self):
+        self.define("x.native", {"run-agent": "native"})
+        self.define("x.odd", {"run-agent": "cobol"})
+        for name in ("x.native", "x.odd", "x.missing", "../etc"):
+            code, result = self.run_agent("--agent", name, "--prompt", "Go.")
+            self.assertEqual((code, result["status"]), (1, "error"), name)
+
+    def test_list_filters_by_role_prefix(self):
+        self.define("bmad-build-auto.quick", {"run-agent": "claude"})
+        self.define("bmad-build-auto.quick.gemini", {"run-agent": "antigravity", "model": "gemini-4-hydrogen"})
+        self.define("bmad-build-auto.quickest", {"run-agent": "claude"})
+        code, result = self.run_agent("--list", "--prefix", "bmad-build-auto.quick")
+        self.assertEqual([d["name"] for d in result], ["bmad-build-auto.quick", "bmad-build-auto.quick.gemini"])
+
+    def test_template_parses(self):
+        template = SCRIPT.parents[1] / "templates" / "definition.md"
+        (self.agents / "t.role.md").write_text(template.read_text())
+        code, result = self.run_agent("--list")
+        self.assertEqual(result, [{"name": "t.role", "run-agent": "claude", "permission": "read-only"}])
+
+
+if __name__ == "__main__":
+    unittest.main()
