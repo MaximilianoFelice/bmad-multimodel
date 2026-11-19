@@ -5,6 +5,8 @@
                                          dependencies, the AGENTS.md block, agent CLIs on PATH
   install.py plan  [changes]             prints what apply would change; writes nothing
   install.py apply [changes]             writes exactly that
+  install.py uninstall [--apply]         removes what this installer wrote: its definitions,
+                                         the AGENTS.md block, the dependencies it declared
 
 Changes (repeatable, all optional):
   --define NAME KEY=VALUE...   a role definition .agents/NAME.md; keys: run-agent, model, effort, permission
@@ -108,9 +110,41 @@ def agents_add(text: str) -> str:
     return (text.rstrip("\n") + "\n\n" if text.strip() else "") + BLOCK + "\n"
 
 
+MARK = "installed-by: bmad-multimodel"
+
+
 def render(fields: dict[str, str]) -> str:
     front = "".join(f"{k}: {fields[k]}\n" for k in KEYS if fields.get(k))
-    return f"---\n{front}---\n"
+    return f"---\n{front}{MARK}\n---\n"
+
+
+def uninstall(root: Path, write: bool) -> list[str]:
+    report, verb = [], "remove" if write else "would remove"
+    for path in sorted((root / ".agents").glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if re.match(r"^---\n.*?^" + re.escape(MARK) + r"$.*?^---", text, re.DOTALL | re.MULTILINE):
+            report.append(f"{verb} .agents/{path.name}")
+            if write:
+                path.unlink()
+    agents_md = root / "AGENTS.md"
+    if agents_md.exists() and BEGIN in agents_md.read_text(encoding="utf-8"):
+        text = agents_md.read_text(encoding="utf-8")
+        after = re.sub(r"\n*" + re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n?", "\n", text, flags=re.DOTALL)
+        report.append(f"{verb} AGENTS.md block")
+        if write:
+            agents_md.write_text(after.rstrip("\n") + "\n" if after.strip() else "", encoding="utf-8")
+    mise = root / "mise.toml"
+    if mise.exists():
+        text = mise.read_text(encoding="utf-8")
+        names = [ACPX[0]] + [k for k, _ in ADAPTERS.values()]
+        pattern = r'^\s*"(' + "|".join(re.escape(n) for n in names) + r')"\s*=.*\n?'
+        found = re.findall(pattern, text, re.MULTILINE)
+        if found:
+            report.append(f"{verb} from mise.toml: {', '.join(found)}")
+            if write:
+                mise.write_text(re.sub(pattern, "", text, flags=re.MULTILINE), encoding="utf-8")
+    report.append("then    you run: npx skills remove bmad-multimodel bmad-multimodel-install")
+    return report
 
 
 def parse_define(raw: list[str]) -> tuple[str, dict[str, str]]:
@@ -193,7 +227,8 @@ def change(root: Path, args, write: bool) -> list[str]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=("status", "plan", "apply"))
+    parser.add_argument("command", choices=("status", "plan", "apply", "uninstall"))
+    parser.add_argument("--apply", action="store_true", help="with uninstall: actually remove")
     parser.add_argument("--project-root", default=".")
     parser.add_argument("--define", nargs="+", action="append", metavar="NAME KEY=VALUE")
     parser.add_argument("--replace", action="store_true")
@@ -204,6 +239,8 @@ def main(argv=None) -> int:
     try:
         if args.command == "status":
             print(json.dumps(status(root), indent=1))
+        elif args.command == "uninstall":
+            print("\n".join(uninstall(root, write=args.apply)))
         else:
             print("\n".join(change(root, args, write=args.command == "apply")) or "nothing to change")
     except (ValueError, tomllib.TOMLDecodeError) as problem:

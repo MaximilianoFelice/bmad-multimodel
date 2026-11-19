@@ -26,6 +26,18 @@ Your harness, your skills, your agents and your models should not come as one bu
 
 Run the installer again whenever you want to add or change something. It keeps what is already there.
 
+## Uninstall
+
+1. **Ask for it:**
+   ```text
+   /bmad-multimodel-install uninstall
+   ```
+   It shows everything the installer wrote: its role files, the `AGENTS.md` block and the dependency lines. It removes them only after you approve. Role files it did not write are never touched.
+2. **Remove the skills:**
+   ```bash
+   npx skills remove bmad-multimodel bmad-multimodel-install
+   ```
+
 ## What you need to know
 
 - **One file per role.** Each configured role is a small file, `.agents/<skill>.<role>.md`. An extra opinion on the same role is another file, `.agents/<skill>.<role>.<variant>.md`. To see or change who runs a role, open its file.
